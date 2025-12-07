@@ -7,5 +7,4 @@ const GenerateProgramPage = () => {
     </div>
   )
 }
-
 export default GenerateProgramPage
