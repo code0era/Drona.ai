@@ -1,4 +1,5 @@
 "use client";
+
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { vapi } from "@/lib/vapi";
@@ -16,26 +17,51 @@ const GenerateProgramPage = () => {
   const { user } = useUser();
   const router = useRouter();
 
-  const messageContainerRef = useRef<HTMLDivElement>(null)
+  const messageContainerRef = useRef<HTMLDivElement>(null);
 
-  // auto scroller
+  // SOLUTION to get rid of "Meeting has ended" error
+  useEffect(() => {
+    const originalError = console.error;
+    // override console.error to ignore "Meeting has ended" errors
+    console.error = function (msg, ...args) {
+      if (
+        msg &&
+        (msg.includes("Meeting has ended") ||
+          (args[0] && args[0].toString().includes("Meeting has ended")))
+      ) {
+        console.log("Ignoring known error: Meeting has ended");
+        return; // don't pass to original handler
+      }
+
+      // pass all other errors to the original handler
+      return originalError.call(console, msg, ...args);
+    };
+
+    // restore original handler on unmount
+    return () => {
+      console.error = originalError;
+    };
+  }, []);
+
+  // auto-scroll messages
   useEffect(() => {
     if (messageContainerRef.current) {
-      messageContainerRef.current.scrollTop = messageContainerRef.current.scrollHeight
+      messageContainerRef.current.scrollTop = messageContainerRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // Navigate  user to profile after call end
+  // navigate user to profile page after the call ends
   useEffect(() => {
     if (callEnded) {
       const redirectTimer = setTimeout(() => {
-        router.push("/profile")
-      }, 2000);
+        router.push("/profile");
+      }, 1500);
+
       return () => clearTimeout(redirectTimer);
     }
   }, [callEnded, router]);
 
-  //  Vapi Event listener
+  // setup event listeners for vapi
   useEffect(() => {
     const handleCallStart = () => {
       console.log("Call started");
@@ -74,8 +100,6 @@ const GenerateProgramPage = () => {
       setCallActive(false);
     };
 
-
-    // Mount Vapi
     vapi
       .on("call-start", handleCallStart)
       .on("call-end", handleCallEnd)
@@ -84,7 +108,7 @@ const GenerateProgramPage = () => {
       .on("message", handleMessage)
       .on("error", handleError);
 
-    //  Unmount Vapi
+    // cleanup event listeners on unmount
     return () => {
       vapi
         .off("call-start", handleCallStart)
@@ -93,13 +117,11 @@ const GenerateProgramPage = () => {
         .off("speech-end", handleSpeechEnd)
         .off("message", handleMessage)
         .off("error", handleError);
-    }
-
+    };
   }, []);
 
-  // Toggle the start call
   const toggleCall = async () => {
-    if (callActive) vapi.stop()
+    if (callActive) vapi.stop();
     else {
       try {
         setConnecting(true);
@@ -110,20 +132,18 @@ const GenerateProgramPage = () => {
           ? `${user.firstName} ${user.lastName || ""}`.trim()
           : "There";
 
-        await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID, {
+        await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID!, {
           variableValues: {
             full_name: fullName,
             user_id: user?.id,
           },
-        })
-
+        });
       } catch (error) {
         console.log("Failed to start call", error);
         setConnecting(false);
-
       }
     }
-  }
+  };
 
   return (
     <div className="flex flex-col min-h-screen text-foreground overflow-hidden  pb-6 pt-24">
@@ -138,13 +158,13 @@ const GenerateProgramPage = () => {
             Have a voice conversation with our AI assistant to create your personalized plan
           </p>
         </div>
-        {/* vedio call */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
 
-          {/* AI assistant  card */}
+        {/* VIDEO CALL AREA */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          {/* AI ASSISTANT CARD */}
           <Card className="bg-card/90 backdrop-blur-sm border border-border overflow-hidden relative">
             <div className="aspect-video flex flex-col items-center justify-center p-6 relative">
-              {/* voice animation */}
+              {/* AI VOICE ANIMATION */}
               <div
                 className={`absolute inset-0 ${isSpeaking ? "opacity-30" : "opacity-0"
                   } transition-opacity duration-300`}
@@ -164,12 +184,14 @@ const GenerateProgramPage = () => {
                   ))}
                 </div>
               </div>
-              {/* AI Image */}
-              <div className="relative size-32 mb-4" >
+
+              {/* AI IMAGE */}
+              <div className="relative size-32 mb-4">
                 <div
                   className={`absolute inset-0 bg-primary opacity-10 rounded-full blur-lg ${isSpeaking ? "animate-pulse" : ""
                     }`}
                 />
+
                 <div className="relative w-full h-full rounded-full bg-card flex items-center justify-center border border-border overflow-hidden">
                   <div className="absolute inset-0 bg-gradient-to-b from-primary/10 to-secondary/10"></div>
                   <img
@@ -178,10 +200,10 @@ const GenerateProgramPage = () => {
                     className="w-full h-full object-cover"
                   />
                 </div>
-
               </div>
-              <h2 className="text-xl font-bold text-foreground">Drona.ai</h2>
-              <p className="text-sm text-muted-foreground mt-1">Fitness & Diet Acharya</p>
+
+              <h2 className="text-xl font-bold text-foreground">CodeFlex AI</h2>
+              <p className="text-sm text-muted-foreground mt-1">Fitness & Diet Coach</p>
 
               {/* SPEAKING INDICATOR */}
 
@@ -207,10 +229,7 @@ const GenerateProgramPage = () => {
             </div>
           </Card>
 
-
-
-
-          {/* User Card */}
+          {/* USER CARD */}
           <Card className={`bg-card/90 backdrop-blur-sm border overflow-hidden relative`}>
             <div className="aspect-video flex flex-col items-center justify-center p-6 relative">
               {/* User Image */}
@@ -237,7 +256,7 @@ const GenerateProgramPage = () => {
           </Card>
         </div>
 
-        {/* // message container*/}
+        {/* MESSAGE COINTER  */}
         {messages.length > 0 && (
           <div
             ref={messageContainerRef}
@@ -265,15 +284,14 @@ const GenerateProgramPage = () => {
           </div>
         )}
 
-
-        {/* Call Controllers  */}
+        {/* CALL CONTROLS */}
         <div className="w-full flex justify-center gap-4">
           <Button
             className={`w-40 text-xl rounded-3xl ${callActive
-              ? "bg-destructive hover:bg-destructive/90"
-              : callEnded
-                ? "bg-green-600 hover:bg-green-700"
-                : "bg-primary hover:bg-primary/90"
+                ? "bg-destructive hover:bg-destructive/90"
+                : callEnded
+                  ? "bg-green-600 hover:bg-green-700"
+                  : "bg-primary hover:bg-primary/90"
               } text-white relative`}
             onClick={toggleCall}
             disabled={connecting || callEnded}
@@ -292,11 +310,9 @@ const GenerateProgramPage = () => {
                     : "Start Call"}
             </span>
           </Button>
-
         </div>
-
-      </div >
-    </div >
-  )
-}
-export default GenerateProgramPage
+      </div>
+    </div>
+  );
+};
+export default GenerateProgramPage;

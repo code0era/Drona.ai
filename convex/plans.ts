@@ -3,7 +3,8 @@ import { v } from "convex/values";
 
 export const createPlan = mutation({
     args: {
-        userId: v.string(),
+        // 1. Change this from v.string() to v.id("users")
+        userId: v.id("users"),
         name: v.string(),
         workoutPlan: v.object({
             schedule: v.array(v.string()),
@@ -34,6 +35,7 @@ export const createPlan = mutation({
     handler: async (ctx, args) => {
         const activePlans = await ctx.db
             .query("plans")
+            // Now args.userId matches the type expected by the index
             .withIndex("by_user_id", (q) => q.eq("userId", args.userId))
             .filter((q) => q.eq(q.field("isActive"), true))
             .collect();
@@ -49,7 +51,8 @@ export const createPlan = mutation({
 });
 
 export const getUserPlans = query({
-    args: { userId: v.string() },
+    // 2. Change this from v.string() to v.id("users") as well
+    args: { userId: v.id("users") },
     handler: async (ctx, args) => {
         const plans = await ctx.db
             .query("plans")
