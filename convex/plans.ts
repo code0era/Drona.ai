@@ -1,10 +1,11 @@
 import { mutation, query } from "./_generated/server";
+
 import { v } from "convex/values";
 
 export const createPlan = mutation({
     args: {
-        // 1. Change this from v.string() to v.id("users")
-        userId: v.id("users"),
+        // FIX 1: Change argument name and type to match the new schema field
+        userEmail: v.string(),
         name: v.string(),
         workoutPlan: v.object({
             schedule: v.array(v.string()),
@@ -16,6 +17,7 @@ export const createPlan = mutation({
                             name: v.string(),
                             sets: v.number(),
                             reps: v.number(),
+                            // Ensure other optional fields from your schema are included here if needed
                         })
                     ),
                 })
@@ -33,10 +35,11 @@ export const createPlan = mutation({
         isActive: v.boolean(),
     },
     handler: async (ctx, args) => {
+        // FIX 2: Deactivate old plans using the new 'by_email' index
         const activePlans = await ctx.db
             .query("plans")
-            // Now args.userId matches the type expected by the index
-            .withIndex("by_user_id", (q) => q.eq("userId", args.userId))
+            // Use the new index and the userEmail argument
+            .withIndex("by_email", (q) => q.eq("userEmail", args.userEmail))
             .filter((q) => q.eq(q.field("isActive"), true))
             .collect();
 
@@ -44,6 +47,7 @@ export const createPlan = mutation({
             await ctx.db.patch(plan._id, { isActive: false });
         }
 
+        // Insert the new plan. The 'args' now correctly contains userEmail.
         const planId = await ctx.db.insert("plans", args);
 
         return planId;
@@ -51,12 +55,13 @@ export const createPlan = mutation({
 });
 
 export const getUserPlans = query({
-    // 2. Change this from v.string() to v.id("users") as well
-    args: { userId: v.id("users") },
+    // FIX 3: Change argument name and type to match the new lookup key
+    args: { userEmail: v.string() },
     handler: async (ctx, args) => {
         const plans = await ctx.db
             .query("plans")
-            .withIndex("by_user_id", (q) => q.eq("userId", args.userId))
+            // FIX 4: Use the new 'by_email' index
+            .withIndex("by_email", (q) => q.eq("userEmail", args.userEmail))
             .order("desc")
             .collect();
 

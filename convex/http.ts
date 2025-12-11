@@ -1,13 +1,50 @@
 import { httpRouter } from "convex/server";
+
 import { WebhookEvent } from "@clerk/nextjs/server";
+
 import { Webhook } from "svix";
+
 import { api } from "./_generated/api";
+
 import { httpAction } from "./_generated/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+
+import Groq from "groq-sdk";
+
 
 const http = httpRouter();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+const GROQ_MODEL = "llama-3.3-70b-versatile";
+
+// FIX 1: Explicitly define 'any' types for all parameters
+function validateWorkoutPlan(plan: any) {
+  const validatedPlan = {
+    schedule: plan.schedule,
+    exercises: plan.exercises.map((exercise: any) => ({
+      day: exercise.day,
+      routines: exercise.routines.map((routine: any) => ({
+        name: routine.name,
+        sets: typeof routine.sets === "number" ? routine.sets : parseInt(routine.sets) || 1,
+        reps: typeof routine.reps === "number" ? routine.reps : parseInt(routine.reps) || 10,
+      })),
+    })),
+  };
+  return validatedPlan;
+}
+
+// FIX 1: Explicitly define 'any' types for all parameters
+function validateDietPlan(plan: any) {
+  const validatedPlan = {
+    dailyCalories: plan.dailyCalories,
+    meals: plan.meals.map((meal: any) => ({
+      name: meal.name,
+      foods: meal.foods,
+    })),
+  };
+  return validatedPlan;
+}
 
 http.route({
   path: "/clerk-webhook",
@@ -32,9 +69,10 @@ http.route({
     const body = JSON.stringify(payload);
 
     const wh = new Webhook(webhookSecret);
-    let evt: WebhookEvent;
+    let evt: WebhookEvent; // FIX 2a: Explicitly define type for evt
 
     try {
+      // FIX 2b: Assert the return type of verify as WebhookEvent
       evt = wh.verify(body, {
         "svix-id": svix_id,
         "svix-timestamp": svix_timestamp,
@@ -45,6 +83,7 @@ http.route({
       return new Response("Error occurred", { status: 400 });
     }
 
+    // FIX 2c: Now evt is known to be WebhookEvent, allowing access to .type and .data
     const eventType = evt.type;
 
     if (eventType === "user.created") {
@@ -90,35 +129,6 @@ http.route({
   }),
 });
 
-// validate and fix workout plan to ensure it has proper numeric types
-function validateWorkoutPlan(plan: any) {
-  const validatedPlan = {
-    schedule: plan.schedule,
-    exercises: plan.exercises.map((exercise: any) => ({
-      day: exercise.day,
-      routines: exercise.routines.map((routine: any) => ({
-        name: routine.name,
-        sets: typeof routine.sets === "number" ? routine.sets : parseInt(routine.sets) || 1,
-        reps: typeof routine.reps === "number" ? routine.reps : parseInt(routine.reps) || 10,
-      })),
-    })),
-  };
-  return validatedPlan;
-}
-
-// validate diet plan to ensure it strictly follows schema
-function validateDietPlan(plan: any) {
-  // only keep the fields we want
-  const validatedPlan = {
-    dailyCalories: plan.dailyCalories,
-    meals: plan.meals.map((meal: any) => ({
-      name: meal.name,
-      foods: meal.foods,
-    })),
-  };
-  return validatedPlan;
-}
-
 http.route({
   path: "/vapi/generate-program",
   method: "POST",
@@ -127,7 +137,7 @@ http.route({
       const payload = await request.json();
 
       const {
-        user_id,
+        user_email,
         age,
         height,
         weight,
@@ -136,116 +146,156 @@ http.route({
         fitness_goal,
         fitness_level,
         dietary_restrictions,
+        // user_id is ignored now
       } = payload;
 
       console.log("Payload is here:", payload);
 
-      const model = genAI.getGenerativeModel({
-        model: "gemini-2.0-flash-001",
-        generationConfig: {
-          temperature: 0.4, // lower temperature for more predictable outputs
-          topP: 0.9,
-          responseMimeType: "application/json",
-        },
-      });
+      // -----------------------------------------------------------------
+      // FIX: VALIDATION - Ensure email is present (Required for DB link)
+      // -----------------------------------------------------------------
+      if (!user_email || typeof user_email !== 'string' || user_email.trim() === "") {
+        throw new Error("Missing required user_email in Vapi payload.");
+      }
+
+      // REMOVED: All ID Lookup Logic (getClerkIdByName or getConvexIdByClerkId)
+
+      // -----------------------------------------------------------------
+      // AI GENERATION: GROQ Implementation
+      // -----------------------------------------------------------------
 
       const workoutPrompt = `You are an experienced fitness coach creating a personalized workout plan based on:
-      Age: ${age}
-      Height: ${height}
-      Weight: ${weight}
-      Injuries or limitations: ${injuries}
-      Available days for workout: ${workout_days}
-      Fitness goal: ${fitness_goal}
-      Fitness level: ${fitness_level}
-      
-      As a professional coach:
-      - Consider muscle group splits to avoid overtraining the same muscles on consecutive days
-      - Design exercises that match the fitness level and account for any injuries
-      - Structure the workouts to specifically target the user's fitness goal
-      
-      CRITICAL SCHEMA INSTRUCTIONS:
-      - Your output MUST contain ONLY the fields specified below, NO ADDITIONAL FIELDS
-      - "sets" and "reps" MUST ALWAYS be NUMBERS, never strings
-      - For example: "sets": 3, "reps": 10
-      - Do NOT use text like "reps": "As many as possible" or "reps": "To failure"
-      - Instead use specific numbers like "reps": 12 or "reps": 15
-      - For cardio, use "sets": 1, "reps": 1 or another appropriate number
-      - NEVER include strings for numerical fields
-      - NEVER add extra fields not shown in the example below
-      
-      Return a JSON object with this EXACT structure:
-      {
-        "schedule": ["Monday", "Wednesday", "Friday"],
-        "exercises": [
+            Age: ${age}
+            Height: ${height}
+            Weight: ${weight}
+            Injuries or limitations: ${injuries}
+            Available days for workout: ${workout_days}
+            Fitness goal: ${fitness_goal}
+            Fitness level: ${fitness_level}
+            
+            As a professional coach:
+            - Consider muscle group splits to avoid overtraining the same muscles on consecutive days
+            - Design exercises that match the fitness level and account for any injuries
+            - Structure the workouts to specifically target the user's fitness goal
+            
+            CRITICAL SCHEMA INSTRUCTIONS:
+            - Your output MUST contain ONLY the fields specified below, NO ADDITIONAL FIELDS
+            - "sets" and "reps" MUST ALWAYS be NUMBERS, never strings
+            - For example: "sets": 3, "reps": 10
+            - Do NOT use text like "reps": "As many as possible" or "reps": "To failure"
+            - Instead use specific numbers like "reps": 12 or "reps": 15
+            - For cardio, use "sets": 1, "reps": 1 or another appropriate number
+            - NEVER include strings for numerical fields
+            - NEVER add extra fields not shown in the example below
+            
+            Return a JSON object with this EXACT structure:
+            {
+              "schedule": ["Monday", "Wednesday", "Friday"],
+              "exercises": [
+                {
+                  "day": "Monday",
+                  "routines": [
+                    {
+                      "name": "Exercise Name",
+                      "sets": 3,
+                      "reps": 10
+                    }
+                  ]
+                }
+              ]
+            }
+            
+            DO NOT add any fields that are not in this example. Your response must be a valid JSON object with no additional text.`;
+
+      const workoutCompletion = await groq.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [
           {
-            "day": "Monday",
-            "routines": [
-              {
-                "name": "Exercise Name",
-                "sets": 3,
-                "reps": 10
-              }
-            ]
+            role: "system",
+            content: "You are an expert fitness coach. Your output MUST be a valid JSON object strictly matching the schema provided in the user prompt. DO NOT include any text outside the JSON."
+          },
+          {
+            role: "user",
+            content: workoutPrompt
           }
-        ]
-      }
-      
-      DO NOT add any fields that are not in this example. Your response must be a valid JSON object with no additional text.`;
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.4,
+      });
 
-      const workoutResult = await model.generateContent(workoutPrompt);
-      const workoutPlanText = workoutResult.response.text();
+      const workoutPlanText = workoutCompletion.choices[0].message.content || "";
+      if (!workoutPlanText) throw new Error("Workout plan generation failed: Model returned empty content.");
 
-      // VALIDATE THE INPUT COMING FROM AI
       let workoutPlan = JSON.parse(workoutPlanText);
       workoutPlan = validateWorkoutPlan(workoutPlan);
+      console.log("workoutPlan:", workoutPlan);
 
       const dietPrompt = `You are an experienced nutrition coach creating a personalized diet plan based on:
-        Age: ${age}
-        Height: ${height}
-        Weight: ${weight}
-        Fitness goal: ${fitness_goal}
-        Dietary restrictions: ${dietary_restrictions}
-        
-        As a professional nutrition coach:
-        - Calculate appropriate daily calorie intake based on the person's stats and goals
-        - Create a balanced meal plan with proper macronutrient distribution
-        - Include a variety of nutrient-dense foods while respecting dietary restrictions
-        - Consider meal timing around workouts for optimal performance and recovery
-        
-        CRITICAL SCHEMA INSTRUCTIONS:
-        - Your output MUST contain ONLY the fields specified below, NO ADDITIONAL FIELDS
-        - "dailyCalories" MUST be a NUMBER, not a string
-        - DO NOT add fields like "supplements", "macros", "notes", or ANYTHING else
-        - ONLY include the EXACT fields shown in the example below
-        - Each meal should include ONLY a "name" and "foods" array
+                Age: ${age}
+                Height: ${height}
+                Weight: ${weight}
+                Fitness goal: ${fitness_goal}
+                Dietary restrictions: ${dietary_restrictions}
+                
+                As a professional nutrition coach:
+                - Calculate appropriate daily calorie intake based on the person's stats and goals
+                - Create a balanced meal plan with proper macronutrient distribution
+                - Include a variety of nutrient-dense foods while respecting dietary restrictions
+                - Consider meal timing around workouts for optimal performance and recovery
+                
+                CRITICAL SCHEMA INSTRUCTIONS:
+                - Your output MUST contain ONLY the fields specified below, NO ADDITIONAL FIELDS
+                - "dailyCalories" MUST be a NUMBER, not a string
+                - DO NOT add fields like "supplements", "macros", "notes", or ANYTHING else
+                - ONLY include the EXACT fields shown in the example below
+                - Each meal should include ONLY a "name" and "foods" array
 
-        Return a JSON object with this EXACT structure and no other fields:
-        {
-          "dailyCalories": 2000,
-          "meals": [
-            {
-              "name": "Breakfast",
-              "foods": ["Oatmeal with berries", "Greek yogurt", "Black coffee"]
-            },
-            {
-              "name": "Lunch",
-              "foods": ["Grilled chicken salad", "Whole grain bread", "Water"]
-            }
-          ]
-        }
-        
-        DO NOT add any fields that are not in this example. Your response must be a valid JSON object with no additional text.`;
+                Return a JSON object with this EXACT structure and no other fields:
+                {
+                  "dailyCalories": 2000,
+                  "meals": [
+                    {
+                      "name": "Breakfast",
+                      "foods": ["Oatmeal with berries", "Greek yogurt", "Black coffee"]
+                    },
+                    {
+                      "name": "Lunch",
+                      "foods": ["Grilled chicken salad", "Whole grain bread", "Water"]
+                    }
+                  ]
+                }
+                
+                DO NOT add any fields that are not in this example. Your response must be a valid JSON object with no additional text.`;
 
-      const dietResult = await model.generateContent(dietPrompt);
-      const dietPlanText = dietResult.response.text();
+      const dietCompletion = await groq.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: "You are an expert nutrition coach. Your output MUST be a valid JSON object strictly matching the schema provided in the user prompt. DO NOT include any text outside the JSON."
+          },
+          {
+            role: "user",
+            content: dietPrompt
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.4,
+      });
 
-      // VALIDATE THE INPUT COMING FROM AI
+      const dietPlanText = dietCompletion.choices[0].message.content || "";
+      if (!dietPlanText) throw new Error("Diet plan generation failed: Model returned empty content.");
+
       let dietPlan = JSON.parse(dietPlanText);
       dietPlan = validateDietPlan(dietPlan);
+      console.log(" dietPlan:", dietPlan);
 
-      // save to our DB: CONVEX
+      // -----------------------------------------------------------------
+      // MUTATION CALL: Pass the email (userEmail) as the foreign key
+      // -----------------------------------------------------------------
+
       const planId = await ctx.runMutation(api.plans.createPlan, {
-        userId: user_id,
+        userEmail: user_email, // <-- FIX: Use the extracted email for saving
         dietPlan,
         isActive: true,
         workoutPlan,

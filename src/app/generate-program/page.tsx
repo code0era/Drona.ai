@@ -128,16 +128,28 @@ const GenerateProgramPage = () => {
         setMessages([]);
         setCallEnded(false);
 
-        const fullName = user?.firstName
-          ? `${user.firstName} ${user.lastName || ""}`.trim()
-          : "There";
+        // Example in GenerateProgramPage.tsx (Inside toggleCall function)
+
+        // 1. Get the unique Clerk ID
+        const uniqueClerkId = user?.id;
+        const fullName = user?.firstName ? `${user.firstName} ${user.lastName || ""}`.trim() : "There";
+        const e = user?.primaryEmailAddress?.emailAddress;
+        if (!uniqueClerkId) {
+          // Cannot start call without a valid authenticated user ID
+          console.error("Clerk ID is missing. Cannot start Vapi call.");
+          return;
+        }
 
         await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID!, {
           variableValues: {
+            user_id: uniqueClerkId, // <-- Use the unique, dedicated key
             full_name: fullName,
-            user_id: user?.id,
+            user_email: e, // <-- FIX: Pass the email here
           },
+
         });
+        console.log(e);
+
       } catch (error) {
         console.log("Failed to start call", error);
         setConnecting(false);
@@ -288,10 +300,10 @@ const GenerateProgramPage = () => {
         <div className="w-full flex justify-center gap-4">
           <Button
             className={`w-40 text-xl rounded-3xl ${callActive
-                ? "bg-destructive hover:bg-destructive/90"
-                : callEnded
-                  ? "bg-green-600 hover:bg-green-700"
-                  : "bg-primary hover:bg-primary/90"
+              ? "bg-destructive hover:bg-destructive/90"
+              : callEnded
+                ? "bg-green-600 hover:bg-green-700"
+                : "bg-primary hover:bg-primary/90"
               } text-white relative`}
             onClick={toggleCall}
             disabled={connecting || callEnded}
