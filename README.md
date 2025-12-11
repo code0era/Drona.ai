@@ -180,4 +180,8 @@ Contributions are welcome\! Please fork the repository and submit a pull request
 
 ## © License
 
-This project is licensed under the [Your License Type] License.
+This project is licensed under the MIT License.
+
+
+Author :
+Code0era
